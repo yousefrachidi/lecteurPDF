@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -51,12 +52,13 @@ import android.print.PrintDocumentAdapter
 import android.os.CancellationSignal
 import android.print.PageRange
 import android.print.PrintDocumentInfo
-import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import android.provider.Settings
+import android.net.Uri
 
 class PdfPrintAdapter(private val context: Context, private val uri: android.net.Uri, private val fileName: String) : PrintDocumentAdapter() {
     override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
@@ -136,21 +138,67 @@ fun MainScreen(viewModel: PdfViewModel) {
         else baseList.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
 
+    val manageStorageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (android.os.Environment.isExternalStorageManager()) {
+                viewModel.scanPdfFiles()
+            } else {
+                Toast.makeText(context, "Permission MANAGE_EXTERNAL_STORAGE refusée", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val readGranted = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] ?: false
+        val readImagesGranted = permissions[Manifest.permission.READ_MEDIA_IMAGES] ?: false
+        val readVideoGranted = permissions[Manifest.permission.READ_MEDIA_VIDEO] ?: false
+        
+        if (readGranted || (readImagesGranted && readVideoGranted)) {
             viewModel.scanPdfFiles()
         } else {
-            Toast.makeText(context, "Permission refusée", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Permission d'accès aux fichiers refusée", Toast.LENGTH_SHORT).show()
         }
     }
 
     LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
-            viewModel.scanPdfFiles()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (android.os.Environment.isExternalStorageManager()) {
+                viewModel.scanPdfFiles()
+            } else {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                    manageStorageLauncher.launch(intent)
+                } catch (e: Exception) {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    manageStorageLauncher.launch(intent)
+                }
+            }
         } else {
-            permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+            val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(
+                    Manifest.permission.READ_MEDIA_IMAGES,
+                    Manifest.permission.READ_MEDIA_VIDEO,
+                    Manifest.permission.READ_MEDIA_AUDIO
+                )
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            
+            val allGranted = permissions.all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            }
+            
+            if (allGranted) {
+                viewModel.scanPdfFiles()
+            } else {
+                permissionLauncher.launch(permissions)
+            }
         }
     }
 
