@@ -102,7 +102,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            LecteurPDFTheme {
+            val isAppDarkMode by viewModel.isAppDarkMode.collectAsState()
+            LecteurPDFTheme(darkTheme = isAppDarkMode) {
                 MainScreen(viewModel)
             }
         }
@@ -116,12 +117,38 @@ fun MainScreen(viewModel: PdfViewModel) {
     val pdfFiles by viewModel.pdfFiles.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val isGridView by viewModel.isGridView.collectAsState()
+    val isAppDarkMode by viewModel.isAppDarkMode.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
     
     var selectedPdf by remember { mutableStateOf<PdfFile?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var infoPdf by remember { mutableStateOf<PdfFile?>(null) }
+
+    if (infoPdf != null) {
+        val pageCount = remember(infoPdf) { viewModel.getPageCount(infoPdf!!) }
+        AlertDialog(
+            onDismissRequest = { infoPdf = null },
+            title = { Text("Informations") },
+            text = {
+                Column {
+                    Text("Nom: ${infoPdf!!.name}", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Chemin: ${infoPdf!!.path}")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Taille: ${formatFileSize(infoPdf!!.size)}")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Dernière modification: ${formatDate(infoPdf!!.dateModified)}")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Nombre de pages: $pageCount")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { infoPdf = null }) { Text("Fermer") }
+            }
+        )
+    }
 
     val filteredFiles = remember(pdfFiles, searchQuery, selectedTab) {
         val baseList = when (selectedTab) {
@@ -143,7 +170,7 @@ fun MainScreen(viewModel: PdfViewModel) {
     ) { _ ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (android.os.Environment.isExternalStorageManager()) {
-                viewModel.scanPdfFiles()
+                viewModel.scanFiles()
             } else {
                 Toast.makeText(context, "Permission MANAGE_EXTERNAL_STORAGE refusée", Toast.LENGTH_SHORT).show()
             }
@@ -158,7 +185,7 @@ fun MainScreen(viewModel: PdfViewModel) {
         val readVideoGranted = permissions[Manifest.permission.READ_MEDIA_VIDEO] ?: false
         
         if (readGranted || (readImagesGranted && readVideoGranted)) {
-            viewModel.scanPdfFiles()
+            viewModel.scanFiles()
         } else {
             Toast.makeText(context, "Permission d'accès aux fichiers refusée", Toast.LENGTH_SHORT).show()
         }
@@ -167,7 +194,7 @@ fun MainScreen(viewModel: PdfViewModel) {
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (android.os.Environment.isExternalStorageManager()) {
-                viewModel.scanPdfFiles()
+                viewModel.scanFiles()
             } else {
                 try {
                     val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -195,7 +222,7 @@ fun MainScreen(viewModel: PdfViewModel) {
             }
             
             if (allGranted) {
-                viewModel.scanPdfFiles()
+                viewModel.scanFiles()
             } else {
                 permissionLauncher.launch(permissions)
             }
@@ -211,6 +238,9 @@ fun MainScreen(viewModel: PdfViewModel) {
                     TopAppBar(
                         title = { Text("Lecteur PDF Pro") },
                         actions = {
+                            IconButton(onClick = { viewModel.toggleAppDarkMode() }) {
+                                Icon(if (isAppDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode, contentDescription = "Mode Nuit")
+                            }
                             IconButton(onClick = { viewModel.toggleGridView() }) {
                                 Icon(if (isGridView) Icons.Default.ViewList else Icons.Default.GridView, contentDescription = "Changer vue")
                             }
@@ -236,7 +266,7 @@ fun MainScreen(viewModel: PdfViewModel) {
                                     )
                                 }
                             }
-                            IconButton(onClick = { viewModel.scanPdfFiles() }) {
+                            IconButton(onClick = { viewModel.scanFiles() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Actualiser")
                             }
                         },
@@ -307,10 +337,19 @@ fun MainScreen(viewModel: PdfViewModel) {
                                  },
                                  onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
                                  onShare = { sharePdf(context, pdf) },
-                                 onRename = { newName -> viewModel.renameFile(pdf, newName) {} },
-                                 onDelete = { viewModel.deleteFile(pdf) {} },
-                                 onPrint = { printPdf(context, pdf) }
-                             )
+                                 onRename = { newName -> 
+                                      viewModel.renameFile(pdf, newName) { success, message ->
+                                          Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                      } 
+                                  },
+                                  onDelete = { 
+                                      viewModel.deleteFile(pdf) { success, message ->
+                                          Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                      } 
+                                  },
+                                  onPrint = { printPdf(context, pdf) },
+                                  onInfo = { infoPdf = pdf }
+                              )
                         }
                     }
                 } else {
@@ -327,10 +366,19 @@ fun MainScreen(viewModel: PdfViewModel) {
                                  },
                                  onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
                                  onShare = { sharePdf(context, pdf) },
-                                 onRename = { newName -> viewModel.renameFile(pdf, newName) {} },
-                                 onDelete = { viewModel.deleteFile(pdf) {} },
-                                 onPrint = { printPdf(context, pdf) }
-                             )
+                                 onRename = { newName -> 
+                                      viewModel.renameFile(pdf, newName) { success, message ->
+                                          Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                      } 
+                                  },
+                                  onDelete = { 
+                                      viewModel.deleteFile(pdf) { success, message ->
+                                          Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                      } 
+                                  },
+                                  onPrint = { printPdf(context, pdf) },
+                                  onInfo = { infoPdf = pdf }
+                              )
                         }
                     }
                 }
@@ -347,7 +395,8 @@ fun PdfGridItem(
     onShare: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onPrint: () -> Unit
+    onPrint: () -> Unit,
+    onInfo: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -407,9 +456,10 @@ fun PdfGridItem(
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         DropdownMenuItem(text = { Text("Partager") }, onClick = { onShare(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Share, null) })
+                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
+                        DropdownMenuItem(text = { Text("Informations") }, onClick = { onInfo(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Info, null) })
                         DropdownMenuItem(text = { Text("Renommer") }, onClick = { showRenameDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                         DropdownMenuItem(text = { Text("Supprimer") }, onClick = { showDeleteDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Delete, null) })
-                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
                     }
                 }
             }
@@ -425,7 +475,8 @@ fun PdfItemRow(
     onShare: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onPrint: () -> Unit
+    onPrint: () -> Unit,
+    onInfo: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -486,9 +537,10 @@ fun PdfItemRow(
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         DropdownMenuItem(text = { Text("Partager") }, onClick = { onShare(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Share, null) })
+                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
+                        DropdownMenuItem(text = { Text("Informations") }, onClick = { onInfo(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Info, null) })
                         DropdownMenuItem(text = { Text("Renommer") }, onClick = { showRenameDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Edit, null) })
                         DropdownMenuItem(text = { Text("Supprimer") }, onClick = { showDeleteDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Delete, null) })
-                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
                     }
             }
         }

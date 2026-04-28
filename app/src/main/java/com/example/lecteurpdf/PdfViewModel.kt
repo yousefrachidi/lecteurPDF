@@ -13,6 +13,8 @@ import kotlinx.coroutines.withContext
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 
 import java.io.File
 
@@ -35,6 +37,15 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _sortOrder = MutableStateFlow(SortOrder.valueOf(prefs.getString("sort_order", SortOrder.DATE.name) ?: SortOrder.DATE.name))
     val sortOrder: StateFlow<SortOrder> = _sortOrder
+
+    private val _isAppDarkMode = MutableStateFlow(prefs.getBoolean("is_app_dark_mode", false))
+    val isAppDarkMode: StateFlow<Boolean> = _isAppDarkMode
+
+    fun toggleAppDarkMode() {
+        val newValue = !_isAppDarkMode.value
+        _isAppDarkMode.value = newValue
+        prefs.edit().putBoolean("is_app_dark_mode", newValue).apply()
+    }
 
     fun toggleGridView() {
         val newValue = !_isGridView.value
@@ -69,106 +80,129 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
         return prefs.getStringSet("recents", emptySet()) ?: emptySet()
     }
 
-    fun deleteFile(pdfFile: PdfFile, onSuccess: () -> Unit) {
+    fun getPageCount(pdfFile: PdfFile): Int {
+        return try {
+            val fileDescriptor = getApplication<Application>().contentResolver.openFileDescriptor(pdfFile.uri, "r")
+            if (fileDescriptor != null) {
+                val renderer = PdfRenderer(fileDescriptor)
+                val count = renderer.pageCount
+                renderer.close()
+                fileDescriptor.close()
+                count
+            } else 0
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    fun deleteFile(pdfFile: PdfFile, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            val file = File(pdfFile.path)
-            if (file.exists() && file.delete()) {
+            try {
+                val deleted = getApplication<Application>().contentResolver.delete(pdfFile.uri, null, null)
                 withContext(Dispatchers.Main) {
-                    _pdfFiles.value = _pdfFiles.value.filter { it.path != pdfFile.path }
-                    onSuccess()
+                    if (deleted > 0) {
+                        onResult(true, "Fichier supprimé")
+                        scanFiles()
+                    } else {
+                        onResult(false, "Impossible de supprimer le fichier")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Erreur: ${e.message}")
                 }
             }
         }
     }
 
-    fun renameFile(pdfFile: PdfFile, newName: String, onSuccess: () -> Unit) {
+    fun renameFile(pdfFile: PdfFile, newName: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            val oldFile = File(pdfFile.path)
-            val parent = oldFile.parentFile
-            val extension = oldFile.extension
-            val newFileName = if (newName.endsWith(".$extension")) newName else "$newName.$extension"
-            val newFile = File(parent, newFileName)
-            
-            if (oldFile.exists() && oldFile.renameTo(newFile)) {
+            try {
+                val values = android.content.ContentValues().apply {
+                    put(MediaStore.Files.FileColumns.DISPLAY_NAME, "$newName.pdf")
+                }
+                val updated = getApplication<Application>().contentResolver.update(pdfFile.uri, values, null, null)
                 withContext(Dispatchers.Main) {
-                    scanPdfFiles() // Re-scan to update everything
-                    onSuccess()
+                    if (updated > 0) {
+                        onResult(true, "Fichier renommé")
+                        scanFiles()
+                    } else {
+                        onResult(false, "Impossible de renommer le fichier")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Erreur: ${e.message}")
                 }
             }
         }
     }
 
     fun toggleFavorite(pdfFile: PdfFile) {
-        val currentFavorites = prefs.getStringSet("favorites", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
-        if (pdfFile.isFavorite) {
-            currentFavorites.remove(pdfFile.path)
+        val favorites = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (favorites.contains(pdfFile.path)) {
+            favorites.remove(pdfFile.path)
         } else {
-            currentFavorites.add(pdfFile.path)
+            favorites.add(pdfFile.path)
         }
-        prefs.edit().putStringSet("favorites", currentFavorites).apply()
+        prefs.edit().putStringSet("favorites", favorites).apply()
         
-        // Update the list in memory
+        // Update the list to reflect change
         _pdfFiles.value = _pdfFiles.value.map {
-            if (it.path == pdfFile.path) it.copy(isFavorite = !it.isFavorite) else it
+            if (it.path == pdfFile.path) it.copy(isFavorite = favorites.contains(it.path)) else it
         }
     }
 
-    private fun isPathFavorite(path: String): Boolean {
-        val favorites = prefs.getStringSet("favorites", emptySet()) ?: emptySet()
-        return favorites.contains(path)
-    }
-
-    fun scanPdfFiles() {
+    fun scanFiles() {
         viewModelScope.launch {
             _isScanning.value = true
-            val files = queryPdfFiles()
-            _pdfFiles.value = files
-            sortCurrentFiles() // Apply sort after scan
+            val files = withContext(Dispatchers.IO) {
+                val list = mutableListOf<PdfFile>()
+                val favorites = prefs.getStringSet("favorites", emptySet()) ?: emptySet()
+                
+                val projection = arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME,
+                    MediaStore.Files.FileColumns.DATA,
+                    MediaStore.Files.FileColumns.SIZE,
+                    MediaStore.Files.FileColumns.DATE_MODIFIED
+                )
+                
+                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
+                val selectionArgs = arrayOf("application/pdf")
+                
+                getApplication<Application>().contentResolver.query(
+                    MediaStore.Files.getContentUri("external"),
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                    val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val pathCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATA)
+                    val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                    val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
+                    
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idCol)
+                        val name = cursor.getString(nameCol)
+                        val path = cursor.getString(pathCol)
+                        val size = cursor.getLong(sizeCol)
+                        val date = cursor.getLong(dateCol)
+                        val uri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), id)
+                        
+                        list.add(PdfFile(name, path, size, date, uri, favorites.contains(path)))
+                    }
+                }
+                list
+            }
+            _pdfFiles.value = when (_sortOrder.value) {
+                SortOrder.NAME -> files.sortedBy { it.name.lowercase() }
+                SortOrder.DATE -> files.sortedByDescending { it.dateModified }
+                SortOrder.SIZE -> files.sortedByDescending { it.size }
+            }
             _isScanning.value = false
         }
-    }
-
-    private suspend fun queryPdfFiles(): List<PdfFile> = withContext(Dispatchers.IO) {
-        val pdfList = mutableListOf<PdfFile>()
-        val collection = MediaStore.Files.getContentUri("external")
-
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns.DISPLAY_NAME,
-            MediaStore.Files.FileColumns.DATA,
-            MediaStore.Files.FileColumns.SIZE,
-            MediaStore.Files.FileColumns.DATE_MODIFIED,
-            MediaStore.Files.FileColumns._ID
-        )
-
-        val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
-        val selectionArgs = arrayOf("application/pdf")
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
-
-        getApplication<Application>().contentResolver.query(
-            collection,
-            projection,
-            selection,
-            selectionArgs,
-            sortOrder
-        )?.use { cursor ->
-            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-            val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATA)
-            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-
-            while (cursor.moveToNext()) {
-                val name = cursor.getString(nameColumn)
-                val path = cursor.getString(pathColumn)
-                val size = cursor.getLong(sizeColumn)
-                val date = cursor.getLong(dateColumn)
-                val id = cursor.getLong(idColumn)
-                val uri = ContentUris.withAppendedId(collection, id)
-                val isFavorite = isPathFavorite(path)
-
-                pdfList.add(PdfFile(name, path, size, date, uri, isFavorite))
-            }
-        }
-        pdfList
     }
 }
