@@ -31,6 +31,68 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.lecteurpdf.ui.theme.LecteurPDFTheme
 
+import android.content.Context
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.webkit.WebResourceRequest
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.History
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+import android.print.PrintDocumentAdapter
+import android.os.CancellationSignal
+import android.print.PageRange
+import android.print.PrintDocumentInfo
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+
+class PdfPrintAdapter(private val context: Context, private val uri: android.net.Uri, private val fileName: String) : PrintDocumentAdapter() {
+    override fun onLayout(oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancellationSignal: CancellationSignal?, callback: LayoutResultCallback?, extras: Bundle?) {
+        if (cancellationSignal?.isCanceled == true) {
+            callback?.onLayoutCancelled()
+            return
+        }
+        val info = PrintDocumentInfo.Builder(fileName)
+            .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+            .build()
+        callback?.onLayoutFinished(info, true)
+    }
+
+    override fun onWrite(pages: Array<out PageRange>?, destination: ParcelFileDescriptor?, cancellationSignal: CancellationSignal?, callback: WriteResultCallback?) {
+        var input: InputStream? = null
+        var output: OutputStream? = null
+        try {
+            input = context.contentResolver.openInputStream(uri)
+            output = FileOutputStream(destination?.fileDescriptor)
+            input?.copyTo(output)
+            callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+        } catch (e: Exception) {
+            callback?.onWriteFailed(e.message)
+        } finally {
+            input?.close()
+            output?.close()
+        }
+    }
+}
+
+fun printPdf(context: Context, pdf: PdfFile) {
+    val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
+    val jobName = "${context.getString(R.string.app_name)} - ${pdf.name}"
+    printManager.print(jobName, PdfPrintAdapter(context, pdf.uri, pdf.name), null)
+}
+
 class MainActivity : ComponentActivity() {
     private val viewModel: PdfViewModel by viewModels()
 
@@ -51,12 +113,25 @@ fun MainScreen(viewModel: PdfViewModel) {
     val context = LocalContext.current
     val pdfFiles by viewModel.pdfFiles.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
+    val isGridView by viewModel.isGridView.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
+    
     var selectedPdf by remember { mutableStateOf<PdfFile?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) }
+    var showSortMenu by remember { mutableStateOf(false) }
 
     val filteredFiles = remember(pdfFiles, searchQuery, selectedTab) {
-        val baseList = if (selectedTab == 0) pdfFiles else pdfFiles.filter { it.isFavorite }
+        val baseList = when (selectedTab) {
+            0 -> pdfFiles
+            1 -> {
+                val recentPaths = viewModel.getRecentPaths()
+                pdfFiles.filter { recentPaths.contains(it.path) }
+            }
+            2 -> pdfFiles.filter { it.isFavorite }
+            else -> pdfFiles
+        }
+        
         if (searchQuery.isEmpty()) baseList
         else baseList.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
@@ -88,26 +163,52 @@ fun MainScreen(viewModel: PdfViewModel) {
                     TopAppBar(
                         title = { Text("Lecteur PDF Pro") },
                         actions = {
+                            IconButton(onClick = { viewModel.toggleGridView() }) {
+                                Icon(if (isGridView) Icons.Default.ViewList else Icons.Default.GridView, contentDescription = "Changer vue")
+                            }
+                            Box {
+                                IconButton(onClick = { showSortMenu = true }) {
+                                    Icon(Icons.Default.Sort, contentDescription = "Trier")
+                                }
+                                DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Nom") },
+                                        onClick = { viewModel.setSortOrder(SortOrder.NAME); showSortMenu = false },
+                                        leadingIcon = { if (sortOrder == SortOrder.NAME) Icon(Icons.Default.Check, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Date") },
+                                        onClick = { viewModel.setSortOrder(SortOrder.DATE); showSortMenu = false },
+                                        leadingIcon = { if (sortOrder == SortOrder.DATE) Icon(Icons.Default.Check, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Taille") },
+                                        onClick = { viewModel.setSortOrder(SortOrder.SIZE); showSortMenu = false },
+                                        leadingIcon = { if (sortOrder == SortOrder.SIZE) Icon(Icons.Default.Check, null) }
+                                    )
+                                }
+                            }
                             IconButton(onClick = { viewModel.scanPdfFiles() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Actualiser")
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            titleContentColor = MaterialTheme.colorScheme.primary,
+                            titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     )
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp),
+                    
+                    SearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onSearch = {},
+                        active = false,
+                        onActiveChange = {},
                         placeholder = { Text("Rechercher un PDF...") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        singleLine = true,
-                        shape = MaterialTheme.shapes.medium
-                    )
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {}
+
                     TabRow(selectedTabIndex = selectedTab) {
                         Tab(
                             selected = selectedTab == 0,
@@ -118,46 +219,149 @@ fun MainScreen(viewModel: PdfViewModel) {
                         Tab(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
+                            text = { Text("Récents") },
+                            icon = { Icon(Icons.Default.History, contentDescription = null) }
+                        )
+                        Tab(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
                             text = { Text("Favoris") },
                             icon = { Icon(Icons.Default.Favorite, contentDescription = null) }
                         )
                     }
                 }
-            },
-            modifier = Modifier.fillMaxSize()
-        ) { innerPadding ->
-            Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-                if (isScanning) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                } else if (filteredFiles.isEmpty()) {
-                    Text(
-                        if (searchQuery.isEmpty()) {
-                            if (selectedTab == 0) "Aucun fichier PDF trouvé" else "Aucun favori pour le moment"
-                        } else "Aucun résultat pour \"$searchQuery\"",
-                        modifier = Modifier.align(Alignment.Center),
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+            }
+        ) { padding ->
+            if (isScanning) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (filteredFiles.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Aucun fichier PDF trouvé")
+                }
+            } else {
+                if (isGridView) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredFiles) {
+                            pdf ->
+                            PdfGridItem(
+                                 pdf = pdf,
+                                 onClick = { 
+                                     viewModel.addToRecent(pdf)
+                                     selectedPdf = pdf 
+                                 },
+                                 onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
+                                 onShare = { sharePdf(context, pdf) },
+                                 onRename = { newName -> viewModel.renameFile(pdf, newName) {} },
+                                 onDelete = { viewModel.deleteFile(pdf) {} },
+                                 onPrint = { printPdf(context, pdf) }
+                             )
+                        }
+                    }
                 } else {
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentPadding = PaddingValues(8.dp)
                     ) {
                         items(filteredFiles) { pdf ->
                             PdfItemRow(
-                                pdf = pdf,
-                                onClick = { selectedPdf = pdf },
-                                onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
-                                onShare = {
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "application/pdf"
-                                        putExtra(Intent.EXTRA_STREAM, pdf.uri)
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Partager le PDF"))
-                                }
-                            )
+                                 pdf = pdf,
+                                 onClick = { 
+                                     viewModel.addToRecent(pdf)
+                                     selectedPdf = pdf 
+                                 },
+                                 onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
+                                 onShare = { sharePdf(context, pdf) },
+                                 onRename = { newName -> viewModel.renameFile(pdf, newName) {} },
+                                 onDelete = { viewModel.deleteFile(pdf) {} },
+                                 onPrint = { printPdf(context, pdf) }
+                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PdfGridItem(
+    pdf: PdfFile,
+    onClick: () -> Unit,
+    onFavoriteToggle: () -> Unit,
+    onShare: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onPrint: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf(pdf.name.substringBeforeLast(".")) }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Renommer") },
+            text = {
+                TextField(value = newName, onValueChange = { newName = it }, label = { Text("Nouveau nom") })
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(newName); showRenameDialog = false }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) { Text("Annuler") }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Supprimer") },
+            text = { Text("Voulez-vous vraiment supprimer ce fichier ?") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(); showDeleteDialog = false }) { Text("Supprimer", color = Color.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("Annuler") }
+            }
+        )
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Box(modifier = Modifier.fillMaxWidth().height(120.dp).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
+                IconButton(onClick = onFavoriteToggle, modifier = Modifier.align(Alignment.TopEnd)) {
+                    Icon(imageVector = if (pdf.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = "Favori", tint = if (pdf.isFavorite) Color.Red else Color.Gray)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = pdf.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    Text(text = formatFileSize(pdf.size), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Plus d'options")
+                    }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(text = { Text("Partager") }, onClick = { onShare(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Share, null) })
+                        DropdownMenuItem(text = { Text("Renommer") }, onClick = { showRenameDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Edit, null) })
+                        DropdownMenuItem(text = { Text("Supprimer") }, onClick = { showDeleteDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Delete, null) })
+                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
                     }
                 }
             }
@@ -170,55 +374,97 @@ fun PdfItemRow(
     pdf: PdfFile,
     onClick: () -> Unit,
     onFavoriteToggle: () -> Unit,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onPrint: () -> Unit
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf(pdf.name.substringBeforeLast(".")) }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Renommer") },
+            text = {
+                TextField(value = newName, onValueChange = { newName = it }, label = { Text("Nouveau nom") })
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(newName); showRenameDialog = false }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) { Text("Annuler") }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Supprimer") },
+            text = { Text("Voulez-vous vraiment supprimer ce fichier ?") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(); showDeleteDialog = false }) { Text("Supprimer", color = Color.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("Annuler") }
+            }
+        )
+    }
+
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onClick() },
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Description,
-                contentDescription = null,
-                tint = Color.Red,
-                modifier = Modifier.size(40.dp)
-            )
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = pdf.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "${(pdf.size / 1024)} KB",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
+                Text(text = pdf.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                Row {
+                    Text(text = formatFileSize(pdf.size), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Text(text = " • ", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Text(text = formatDate(pdf.dateModified), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
             }
             IconButton(onClick = onFavoriteToggle) {
-                Icon(
-                    imageVector = if (pdf.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Favori",
-                    tint = if (pdf.isFavorite) Color.Red else Color.Gray
-                )
+                Icon(imageVector = if (pdf.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = "Favori", tint = if (pdf.isFavorite) Color.Red else Color.Gray)
             }
-            IconButton(onClick = onShare) {
-                Icon(
-                    imageVector = Icons.Default.Share,
-                    contentDescription = "Partager",
-                    tint = MaterialTheme.colorScheme.primary
-                )
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Plus d'options")
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(text = { Text("Partager") }, onClick = { onShare(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Share, null) })
+                        DropdownMenuItem(text = { Text("Renommer") }, onClick = { showRenameDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Edit, null) })
+                        DropdownMenuItem(text = { Text("Supprimer") }, onClick = { showDeleteDialog = true; showMenu = false }, leadingIcon = { Icon(Icons.Default.Delete, null) })
+                        DropdownMenuItem(text = { Text("Imprimer") }, onClick = { onPrint(); showMenu = false }, leadingIcon = { Icon(Icons.Default.Print, null) })
+                    }
             }
         }
     }
+}
+
+fun sharePdf(context: Context, pdf: PdfFile) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/pdf"
+        putExtra(Intent.EXTRA_STREAM, pdf.uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Partager le PDF"))
+}
+
+fun formatFileSize(size: Long): String {
+    if (size <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
+    return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+}
+
+fun formatDate(timestamp: Long): String {
+    val date = Date(timestamp * 1000)
+    val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    return sdf.format(date)
 }
