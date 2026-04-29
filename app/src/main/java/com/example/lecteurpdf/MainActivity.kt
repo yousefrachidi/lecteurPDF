@@ -101,11 +101,34 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIncomingIntent(intent)
         setContent {
             val isAppDarkMode by viewModel.isAppDarkMode.collectAsState()
             LecteurPDFTheme(darkTheme = isAppDarkMode) {
                 MainScreen(viewModel)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            val uri = intent.data ?: return
+            val mimeType = intent.type ?: guessMimeType(uri)
+            viewModel.handleExternalFile(uri, mimeType)
+        }
+    }
+
+    private fun guessMimeType(uri: Uri): String {
+        val path = uri.path?.lowercase() ?: return FileType.PDF.mimeType
+        return when {
+            path.endsWith(".docx") -> FileType.DOCX.mimeType
+            path.endsWith(".xlsx") -> FileType.XLSX.mimeType
+            else -> FileType.PDF.mimeType
         }
     }
 }
@@ -119,8 +142,10 @@ fun MainScreen(viewModel: PdfViewModel) {
     val isGridView by viewModel.isGridView.collectAsState()
     val isAppDarkMode by viewModel.isAppDarkMode.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
-    
+    val externalFile by viewModel.externalFile.collectAsState()
+
     var selectedPdf by remember { mutableStateOf<PdfFile?>(null) }
+    val activeFile = externalFile ?: selectedPdf
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -233,11 +258,15 @@ fun MainScreen(viewModel: PdfViewModel) {
         }
     }
 
-    if (selectedPdf != null) {
-        when (selectedPdf!!.fileType) {
-            FileType.PDF -> PdfViewer(uri = selectedPdf!!.uri, onBack = { selectedPdf = null })
-            FileType.DOCX -> DocxViewer(uri = selectedPdf!!.uri, fileName = selectedPdf!!.name, onBack = { selectedPdf = null })
-            FileType.XLSX -> XlsxViewer(uri = selectedPdf!!.uri, fileName = selectedPdf!!.name, onBack = { selectedPdf = null })
+    if (activeFile != null) {
+        val onBack = {
+            viewModel.clearExternalFile()
+            selectedPdf = null
+        }
+        when (activeFile.fileType) {
+            FileType.PDF -> PdfViewer(uri = activeFile.uri, onBack = onBack)
+            FileType.DOCX -> DocxViewer(uri = activeFile.uri, fileName = activeFile.name, onBack = onBack)
+            FileType.XLSX -> XlsxViewer(uri = activeFile.uri, fileName = activeFile.name, onBack = onBack)
         }
     } else {
         Scaffold(

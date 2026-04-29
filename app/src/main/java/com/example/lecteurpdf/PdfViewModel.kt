@@ -15,6 +15,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 
 import java.io.File
 
@@ -40,6 +41,37 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAppDarkMode = MutableStateFlow(prefs.getBoolean("is_app_dark_mode", false))
     val isAppDarkMode: StateFlow<Boolean> = _isAppDarkMode
+
+    private val _externalFile = MutableStateFlow<PdfFile?>(null)
+    val externalFile: StateFlow<PdfFile?> = _externalFile
+
+    fun handleExternalFile(uri: android.net.Uri, mimeType: String) {
+        val fileType = when (mimeType) {
+            FileType.DOCX.mimeType -> FileType.DOCX
+            FileType.XLSX.mimeType -> FileType.XLSX
+            else -> FileType.PDF
+        }
+        val name = getDisplayName(uri)
+        _externalFile.value = PdfFile(name, uri.toString(), 0L, 0L, uri, false, fileType)
+    }
+
+    fun clearExternalFile() {
+        _externalFile.value = null
+    }
+
+    private fun getDisplayName(uri: android.net.Uri): String {
+        if (uri.scheme == "content") {
+            getApplication<Application>().contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) return cursor.getString(idx)
+                }
+            }
+        }
+        return uri.lastPathSegment ?: "Document"
+    }
 
     fun toggleAppDarkMode() {
         val newValue = !_isAppDarkMode.value
