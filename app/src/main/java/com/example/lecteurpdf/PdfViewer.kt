@@ -36,11 +36,6 @@ import androidx.compose.material.icons.filled.Info
 
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.transformable
-import androidx.compose.ui.graphics.graphicsLayer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -235,10 +230,6 @@ fun PdfViewer(uri: Uri, onBack: () -> Unit) {
 @Composable
 fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isHorizontal: Boolean) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var scale by remember { mutableFloatStateOf(1f) }
-    val state = rememberTransformableState { zoomChange, _, _ ->
-        scale *= zoomChange
-    }
 
     LaunchedEffect(pageIndex) {
         withContext(Dispatchers.IO) {
@@ -256,18 +247,10 @@ fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isH
     }
 
     Card(
-        modifier = (if (isHorizontal) Modifier.fillMaxHeight().aspectRatio(if (bitmap != null) bitmap!!.width.toFloat() / bitmap!!.height.toFloat() else 0.7f)
-                  else Modifier.fillMaxWidth())
-                  .graphicsLayer(
-                       scaleX = maxOf(1f, scale),
-                       scaleY = maxOf(1f, scale)
-                   )
-                   .transformable(state = state)
-                   .pointerInput(Unit) {
-                       detectTapGestures(
-                           onDoubleTap = { scale = 1f }
-                       )
-                   },
+        modifier = if (isHorizontal)
+            Modifier.fillMaxHeight().aspectRatio(if (bitmap != null) bitmap!!.width.toFloat() / bitmap!!.height.toFloat() else 0.7f)
+        else
+            Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         if (bitmap != null) {
