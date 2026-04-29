@@ -36,6 +36,12 @@ import androidx.compose.material.icons.filled.Info
 
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.calculateZoom
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -230,12 +236,12 @@ fun PdfViewer(uri: Uri, onBack: () -> Unit) {
 @Composable
 fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isHorizontal: Boolean) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var scale by remember { mutableFloatStateOf(1f) }
 
     LaunchedEffect(pageIndex) {
         withContext(Dispatchers.IO) {
             try {
                 val page = renderer.openPage(pageIndex)
-                // Render at higher quality (2x)
                 val newBitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
                 page.render(newBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 bitmap = newBitmap
@@ -247,10 +253,28 @@ fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isH
     }
 
     Card(
-        modifier = if (isHorizontal)
+        modifier = (if (isHorizontal)
             Modifier.fillMaxHeight().aspectRatio(if (bitmap != null) bitmap!!.width.toFloat() / bitmap!!.height.toFloat() else 0.7f)
         else
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth())
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .pointerInput(Unit) {
+                // Zoom pinch (2 doigts) — ne consomme PAS les events 1 doigt → scroll LazyColumn préservé
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        if (event.changes.size >= 2) {
+                            val zoom = event.calculateZoom()
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            event.changes.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = { scale = 1f })
+            },
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         if (bitmap != null) {
