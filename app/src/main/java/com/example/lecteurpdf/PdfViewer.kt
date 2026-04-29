@@ -163,7 +163,7 @@ fun PdfViewer(uri: Uri, onBack: () -> Unit) {
                     tonalElevation = 4.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Column(modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Slider(
                             value = currentPage.toFloat(),
                             onValueChange = { 
@@ -276,7 +276,7 @@ fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isH
                            }
                        )
                    },
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         if (bitmap != null) {
             Image(

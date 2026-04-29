@@ -135,13 +135,17 @@ fun MainScreen(viewModel: PdfViewModel) {
                 Column {
                     Text("Nom: ${infoPdf!!.name}", fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
+                    Text("Type: ${infoPdf!!.fileType.name}")
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text("Chemin: ${infoPdf!!.path}")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Taille: ${formatFileSize(infoPdf!!.size)}")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Dernière modification: ${formatDate(infoPdf!!.dateModified)}")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Nombre de pages: $pageCount")
+                    if (pageCount >= 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Nombre de pages: $pageCount")
+                    }
                 }
             },
             confirmButton = {
@@ -230,7 +234,11 @@ fun MainScreen(viewModel: PdfViewModel) {
     }
 
     if (selectedPdf != null) {
-        PdfViewer(uri = selectedPdf!!.uri, onBack = { selectedPdf = null })
+        when (selectedPdf!!.fileType) {
+            FileType.PDF -> PdfViewer(uri = selectedPdf!!.uri, onBack = { selectedPdf = null })
+            FileType.DOCX -> DocxViewer(uri = selectedPdf!!.uri, fileName = selectedPdf!!.name, onBack = { selectedPdf = null })
+            FileType.XLSX -> XlsxViewer(uri = selectedPdf!!.uri, fileName = selectedPdf!!.name, onBack = { selectedPdf = null })
+        }
     } else {
         Scaffold(
             topBar = {
@@ -331,9 +339,9 @@ fun MainScreen(viewModel: PdfViewModel) {
                             pdf ->
                             PdfGridItem(
                                  pdf = pdf,
-                                 onClick = { 
+                                 onClick = {
                                      viewModel.addToRecent(pdf)
-                                     selectedPdf = pdf 
+                                     selectedPdf = pdf
                                  },
                                  onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
                                  onShare = { sharePdf(context, pdf) },
@@ -360,9 +368,9 @@ fun MainScreen(viewModel: PdfViewModel) {
                         items(filteredFiles) { pdf ->
                             PdfItemRow(
                                  pdf = pdf,
-                                 onClick = { 
+                                 onClick = {
                                      viewModel.addToRecent(pdf)
-                                     selectedPdf = pdf 
+                                     selectedPdf = pdf
                                  },
                                  onFavoriteToggle = { viewModel.toggleFavorite(pdf) },
                                  onShare = { sharePdf(context, pdf) },
@@ -438,8 +446,13 @@ fun PdfGridItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
+            val (docIcon, docTint) = when (pdf.fileType) {
+                FileType.PDF -> Pair(Icons.Default.PictureAsPdf, Color(0xFFE53935))
+                FileType.DOCX -> Pair(Icons.Default.Description, Color(0xFF1565C0))
+                FileType.XLSX -> Pair(Icons.Default.GridOn, Color(0xFF2E7D32))
+            }
             Box(modifier = Modifier.fillMaxWidth().height(120.dp).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
+                Icon(docIcon, contentDescription = null, modifier = Modifier.size(64.dp), tint = docTint)
                 IconButton(onClick = onFavoriteToggle, modifier = Modifier.align(Alignment.TopEnd)) {
                     Icon(imageVector = if (pdf.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = "Favori", tint = if (pdf.isFavorite) Color.Red else Color.Gray)
                 }
@@ -518,7 +531,12 @@ fun PdfItemRow(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+            val (rowIcon, rowTint) = when (pdf.fileType) {
+                FileType.PDF -> Pair(Icons.Default.PictureAsPdf, Color(0xFFE53935))
+                FileType.DOCX -> Pair(Icons.Default.Description, Color(0xFF1565C0))
+                FileType.XLSX -> Pair(Icons.Default.GridOn, Color(0xFF2E7D32))
+            }
+            Icon(rowIcon, contentDescription = null, modifier = Modifier.size(40.dp), tint = rowTint)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = pdf.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
@@ -544,6 +562,18 @@ fun PdfItemRow(
                     }
             }
         }
+    }
+}
+
+fun openDocument(context: Context, file: PdfFile) {
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(file.uri, file.fileType.mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    try {
+        context.startActivity(Intent.createChooser(intent, "Ouvrir avec"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Aucune application disponible pour ouvrir ce fichier", Toast.LENGTH_SHORT).show()
     }
 }
 

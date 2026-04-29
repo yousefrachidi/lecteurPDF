@@ -81,6 +81,7 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun getPageCount(pdfFile: PdfFile): Int {
+        if (pdfFile.fileType != FileType.PDF) return -1
         return try {
             val fileDescriptor = getApplication<Application>().contentResolver.openFileDescriptor(pdfFile.uri, "r")
             if (fileDescriptor != null) {
@@ -165,11 +166,16 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
                     MediaStore.Files.FileColumns.DISPLAY_NAME,
                     MediaStore.Files.FileColumns.DATA,
                     MediaStore.Files.FileColumns.SIZE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED
+                    MediaStore.Files.FileColumns.DATE_MODIFIED,
+                    MediaStore.Files.FileColumns.MIME_TYPE
                 )
-                
-                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} = ?"
-                val selectionArgs = arrayOf("application/pdf")
+
+                val selection = "${MediaStore.Files.FileColumns.MIME_TYPE} IN (?, ?, ?)"
+                val selectionArgs = arrayOf(
+                    FileType.PDF.mimeType,
+                    FileType.DOCX.mimeType,
+                    FileType.XLSX.mimeType
+                )
                 
                 getApplication<Application>().contentResolver.query(
                     MediaStore.Files.getContentUri("external"),
@@ -183,16 +189,22 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
                     val pathCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATA)
                     val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
                     val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
-                    
+                    val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MIME_TYPE)
+
                     while (cursor.moveToNext()) {
                         val id = cursor.getLong(idCol)
-                        val name = cursor.getString(nameCol)
-                        val path = cursor.getString(pathCol)
+                        val name = cursor.getString(nameCol) ?: continue
+                        val path = cursor.getString(pathCol) ?: ""
                         val size = cursor.getLong(sizeCol)
                         val date = cursor.getLong(dateCol)
+                        val mimeType = cursor.getString(mimeCol) ?: ""
                         val uri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), id)
-                        
-                        list.add(PdfFile(name, path, size, date, uri, favorites.contains(path)))
+                        val fileType = when (mimeType) {
+                            FileType.DOCX.mimeType -> FileType.DOCX
+                            FileType.XLSX.mimeType -> FileType.XLSX
+                            else -> FileType.PDF
+                        }
+                        list.add(PdfFile(name, path, size, date, uri, favorites.contains(path), fileType))
                     }
                 }
                 list
