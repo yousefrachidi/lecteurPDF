@@ -41,7 +41,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.Offset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -237,10 +236,8 @@ fun PdfViewer(uri: Uri, onBack: () -> Unit) {
 fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isHorizontal: Boolean) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    val state = rememberTransformableState { zoomChange, offsetChange, _ ->
+    val state = rememberTransformableState { zoomChange, _, _ ->
         scale *= zoomChange
-        offset += offsetChange
     }
 
     LaunchedEffect(pageIndex) {
@@ -263,17 +260,12 @@ fun PdfPage(renderer: PdfRenderer, pageIndex: Int, colorMatrix: ColorMatrix, isH
                   else Modifier.fillMaxWidth())
                   .graphicsLayer(
                        scaleX = maxOf(1f, scale),
-                       scaleY = maxOf(1f, scale),
-                       translationX = offset.x,
-                       translationY = offset.y
+                       scaleY = maxOf(1f, scale)
                    )
                    .transformable(state = state)
                    .pointerInput(Unit) {
                        detectTapGestures(
-                           onDoubleTap = {
-                               scale = 1f
-                               offset = Offset.Zero
-                           }
+                           onDoubleTap = { scale = 1f }
                        )
                    },
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
