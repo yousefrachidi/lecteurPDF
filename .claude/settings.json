@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/ayoubbouziane/AndroidStudioProjects/VsCode/lecteurPDF add app/src/main/java/com/example/lecteurpdf/MainActivity.kt app/src/main/java/com/example/lecteurpdf/PdfFile.kt app/src/main/java/com/example/lecteurpdf/PdfViewModel.kt app/src/main/java/com/example/lecteurpdf/PdfViewer.kt app/src/main/java/com/example/lecteurpdf/DocxViewer.kt app/src/main/java/com/example/lecteurpdf/XlsxViewer.kt)"
+    ]
+  }
+}
